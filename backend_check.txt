@@ -1,0 +1,19 @@
+Traceback (most recent call last):
+  File "/home/ubuntu/timetable_work/run_django_checks.py", line 10, in <module>
+    call_command('check', verbosity=2)
+  File "/usr/local/lib/python3.12/dist-packages/django/core/management/__init__.py", line 194, in call_command
+    return command.execute(*args, **defaults)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/django/core/management/base.py", line 458, in execute
+    output = self.handle(*args, **options)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/django/core/management/commands/check.py", line 76, in handle
+    self.check(
+  File "/usr/local/lib/python3.12/dist-packages/django/core/management/base.py", line 556, in check
+    raise SystemCheckError(msg)
+django.core.management.base.SystemCheckError: SystemCheckError: System check identified some issues:
+
+ERRORS:
+<class 'apps.attendance.admin.AttendanceSummaryAdmin'>: (admin.E116) The value of 'list_filter[0]' refers to 'is_below_minimum', which does not refer to a Field.
+
+System check identified 1 issue (0 silenced).

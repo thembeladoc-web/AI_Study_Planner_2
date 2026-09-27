@@ -1,0 +1,162 @@
+.dashboard {
+  animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+  margin-bottom: 32px;
+}
+
+.quick-actions {
+  margin-bottom: 32px;
+}
+
+.quick-actions h2 {
+  margin-bottom: 16px;
+  color: #2c3e50;
+}
+
+.action-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+.action-btn {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  background: white;
+  border-radius: 12px;
+  text-decoration: none;
+  color: #333;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  transition: all 0.2s;
+}
+
+.action-btn:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.12);
+}
+
+.action-btn.primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.action-btn span {
+  font-size: 2rem;
+}
+
+.action-btn h4 {
+  margin: 0 0 4px 0;
+  font-size: 1.1rem;
+}
+
+.action-btn p {
+  margin: 0;
+  font-size: 0.9rem;
+  opacity: 0.8;
+}
+
+.upcoming-section {
+  background: white;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.upcoming-section h2 {
+  margin-bottom: 16px;
+  color: #2c3e50;
+}
+
+.assignments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.assignment-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  background: #f8f9fa;
+  border-radius: 10px;
+  border-left: 4px solid #e0e0e0;
+}
+
+.assignment-item.priority-3,
+.assignment-item.priority-4 {
+  border-left-color: #ff9800;
+  background: #fff8e1;
+}
+
+.assignment-item.priority-4 {
+  border-left-color: #f44336;
+  background: #ffebee;
+}
+
+.assignment-info h4 {
+  margin: 0 0 4px 0;
+  font-size: 1rem;
+}
+
+.assignment-info p {
+  margin: 0;
+  color: #888;
+  font-size: 0.9rem;
+}
+
+.assignment-meta {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.due-badge {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  background: #e8f5e9;
+  color: #4CAF50;
+}
+
+.due-badge.urgent {
+  background: #ffebee;
+  color: #f44336;
+  font-weight: 600;
+}
+
+.weight-badge {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  background: #e3f2fd;
+  color: #2196F3;
+}
+
+@media (max-width: 768px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .action-buttons {
+    grid-template-columns: 1fr;
+  }
+
+  .assignment-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+}

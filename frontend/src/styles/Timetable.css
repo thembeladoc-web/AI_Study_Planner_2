@@ -1,0 +1,250 @@
+.timetable-page {
+  animation: fadeIn 0.3s ease-in;
+}
+
+.conflicts-panel {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 24px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.conflicts-panel h3 {
+  color: #f44336;
+  margin-bottom: 16px;
+}
+
+.conflict-section {
+  margin-bottom: 16px;
+}
+
+.conflict-section h4 {
+  color: #666;
+  margin-bottom: 8px;
+}
+
+.conflict-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: #ffebee;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.conflict-badge {
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.conflict-badge.critical {
+  background: #f44336;
+  color: white;
+}
+
+.conflict-badge.warning {
+  background: #ff9800;
+  color: white;
+}
+
+.day-selector {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+.day-btn {
+  padding: 10px 20px;
+  border-radius: 8px;
+  background: white;
+  color: #666;
+  border: 2px solid #e0e0e0;
+  white-space: nowrap;
+}
+
+.day-btn.active {
+  background: #667eea;
+  color: white;
+  border-color: #667eea;
+}
+
+.timetable-grid {
+  display: flex;
+  background: white;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  margin-bottom: 32px;
+  min-height: 500px;
+}
+
+.time-column {
+  width: 60px;
+  background: #f8f9fa;
+  border-right: 1px solid #e0e0e0;
+  flex-shrink: 0;
+}
+
+.time-slot {
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  color: #888;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.classes-column {
+  flex: 1;
+  position: relative;
+  padding: 0 16px;
+}
+
+.class-card {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+  overflow: hidden;
+}
+
+.class-card.tutorial {
+  background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+  box-shadow: 0 4px 12px rgba(17, 153, 142, 0.3);
+}
+
+.class-card.lab {
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  box-shadow: 0 4px 12px rgba(240, 147, 251, 0.3);
+}
+
+.class-card h4 {
+  margin: 0 0 4px 0;
+  font-size: 0.95rem;
+}
+
+.class-card p {
+  margin: 0;
+  font-size: 0.85rem;
+  opacity: 0.9;
+}
+
+.time-badge {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 8px;
+  background: rgba(255,255,255,0.2);
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+
+.my-courses-section,
+.available-courses {
+  margin-bottom: 32px;
+}
+
+.my-courses-section h2,
+.available-courses h2 {
+  margin-bottom: 16px;
+  color: #2c3e50;
+}
+
+.courses-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.course-card {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  transition: all 0.2s;
+}
+
+.course-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.12);
+}
+
+.course-card.enrolled {
+  border: 2px solid #4CAF50;
+}
+
+.course-card h4 {
+  margin: 0 0 8px 0;
+  color: #667eea;
+  font-size: 1.1rem;
+}
+
+.course-card p {
+  margin: 0 0 12px 0;
+  color: #666;
+  font-size: 0.95rem;
+}
+
+.course-meta {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.credit-badge,
+.difficulty-badge {
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  background: #e8f5e9;
+  color: #4CAF50;
+}
+
+.difficulty-badge {
+  background: #fff3e0;
+  color: #ff9800;
+}
+
+.enroll-btn {
+  width: 100%;
+  background: #667eea;
+  color: white;
+  padding: 10px;
+}
+
+.enroll-btn:hover {
+  background: #5a67d8;
+}
+
+.enrolled-badge {
+  display: block;
+  text-align: center;
+  padding: 10px;
+  color: #4CAF50;
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .timetable-grid {
+    min-height: 400px;
+  }
+
+  .time-column {
+    width: 50px;
+  }
+
+  .courses-grid {
+    grid-template-columns: 1fr;
+  }
+}

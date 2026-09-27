@@ -1,0 +1,15 @@
+{
+  "short_name": "Pace Planner",
+  "name": "Pace AI Study Planner",
+  "icons": [
+    {
+      "src": "pace-logo.jpeg",
+      "sizes": "1080x1069",
+      "type": "image/jpeg"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#11121a",
+  "background_color": "#11121a"
+}

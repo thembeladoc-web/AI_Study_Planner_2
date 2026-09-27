@@ -1,0 +1,1434 @@
+--- tests/test_attendance.py
+"""
+Attendance App Tests
+"""
+import pytest
+from django.urls import reverse
+from rest_framework.test import APIClient
+from rest_framework import status
+from datetime import date, time
+
+from apps.accounts.models import Student
+from apps.timetable.models import Course, ClassSchedule, StudentCourse
+from apps.attendance.models import AttendanceRecord, AttendanceSummary
+
+
+@pytest.fixture
+def api_client():
+    return APIClient()
+
+
+@pytest.fixture
+def test_user():
+    return Student.objects.create_user(
+        username='teststudent',
+        email='test@richfield.ac.za',
+        password='testpass123'
+    )
+
+
+@pytest.fixture
+def test_course():
+    return Course.objects.create(code='MAT201', name='Mathematics II', credits=4)
+
+
+@pytest.fixture
+def test_schedule(test_course):
+    return ClassSchedule.objects.create(
+        course=test_course,
+        session_type='lecture',
+        day_of_week=0,
+        start_time=time(8, 0),
+        end_time=time(10, 0),
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 12, 31)
+    )
+
+
+@pytest.mark.django_db
+class TestAttendanceMarking:
+    def test_mark_attendance(self, api_client, test_user, test_course, test_schedule):
+        StudentCourse.objects.create(student=test_user, course=test_course)
+
+        api_client.force_authenticate(user=test_user)
+        data = {
+            'class_schedule_id': test_schedule.id,
+            'date': '2026-06-01',
+            'status': 'present',
+            'check_in_time': '08:05'
+        }
+        response = api_client.post(reverse('mark-attendance'), data)
+        assert response.status_code == status.HTTP_200_OK
+        assert AttendanceRecord.objects.filter(student=test_user).exists()
+
+    def test_mark_attendance_unenrolled(self, api_client, test_user, test_schedule):
+        api_client.force_authenticate(user=test_user)
+        data = {
+            'class_schedule_id': test_schedule.id,
+            'date': '2026-06-01',
+            'status': 'present'
+        }
+        response = api_client.post(reverse('mark-attendance'), data)
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+class TestAttendanceAlerts:
+    def test_attendance_alerts(self, api_client, test_user, test_course, test_schedule):
+        StudentCourse.objects.create(student=test_user, course=test_course)
+
+        for i in range(5):
+            AttendanceRecord.objects.create(
+                student=test_user,
+                class_schedule=test_schedule,
+                date=date(2026, 6, 1 + i),
+                status='absent'
+            )
+
+        api_client.force_authenticate(user=test_user)
+        response = api_client.get(reverse('attendance-alerts'))
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['total_alerts'] > 0
+--- tests/test_scheduler.py
+"""
+Scheduler App Tests - AI Study Plan Generation
+"""
+import pytest
+from django.urls import reverse
+from rest_framework.test import APIClient
+from rest_framework import status
+from datetime import date, time, datetime
+
+from apps.accounts.models import Student
+from apps.timetable.models import Course, ClassSchedule, StudentCourse
+from apps.scheduler.models import StudyPlan, StudySession
+
+
+@pytest.fixture
+def api_client():
+    return APIClient()
+
+
+@pytest.fixture
+def test_user():
+    return Student.objects.create_user(
+        username='teststudent',
+        email='test@richfield.ac.za',
+        password='testpass123',
+        study_preference='morning',
+        max_study_hours_per_day=6
+    )
+
+
+@pytest.fixture
+def test_course():
+    return Course.objects.create(
+        code='MAT201',
+        name='Mathematics II',
+        credits=4,
+        difficulty_rating=4
+    )
+
+
+@pytest.fixture
+def enrolled_course(test_user, test_course):
+    StudentCourse.objects.create(
+        student=test_user,
+        course=test_course,
+        semester='semester_2',
+        academic_year='2026'
+    )
+    return test_course
+
+
+@pytest.mark.django_db
+class TestStudyPlanGeneration:
+    def test_generate_study_plan(self, api_client, test_user, enrolled_course):
+        api_client.force_authenticate(user=test_user)
+        data = {
+            'week_start': '2026-06-01',
+            'week_end': '2026-06-07',
+            'preferences': {
+                'max_hours_per_day': 6,
+                'min_break_minutes': 30
+            }
+        }
+        response = api_client.post(reverse('generate-study-plan'), data)
+        assert response.status_code == status.HTTP_200_OK
+        assert 'study_plan' in response.data
+        assert response.data['sessions_created'] > 0
+        assert response.data['solver_status'] in ['OPTIMAL', 'FEASIBLE']
+
+    def test_study_plan_with_no_courses(self, api_client, test_user):
+        api_client.force_authenticate(user=test_user)
+        data = {
+            'week_start': '2026-06-01',
+            'week_end': '2026-06-07'
+        }
+        response = api_client.post(reverse('generate-study-plan'), data)
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'error' in response.data
+
+
+@pytest.mark.django_db
+class TestStudySessionManagement:
+    def test_mark_session_complete(self, api_client, test_user, enrolled_course):
+        plan = StudyPlan.objects.create(
+            student=test_user,
+            week_start=date(2026, 6, 1),
+            week_end=date(2026, 6, 7)
+        )
+        session = StudySession.objects.create(
+            study_plan=plan,
+            course=enrolled_course,
+            day_of_week=0,
+            start_time=time(14, 0),
+            end_time=time(15, 30),
+            duration_minutes=90,
+            session_type='deep_study'
+        )
+
+        api_client.force_authenticate(user=test_user)
+        data = {'actual_duration_minutes': 90, 'notes': 'Completed chapter 3'}
+        response = api_client.post(
+            reverse('mark-complete', kwargs={'session_id': session.id}),
+            data
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['session']['is_completed'] is True
+
+
+@pytest.mark.django_db
+class TestStudyPlanStats:
+    def test_plan_statistics(self, api_client, test_user, enrolled_course):
+        plan = StudyPlan.objects.create(
+            student=test_user,
+            week_start=date(2026, 6, 1),
+            week_end=date(2026, 6, 7)
+        )
+        StudySession.objects.create(
+            study_plan=plan,
+            course=enrolled_course,
+            day_of_week=0,
+            start_time=time(14, 0),
+            end_time=time(15, 0),
+            duration_minutes=60,
+            is_completed=True,
+            actual_duration_minutes=60
+        )
+
+        api_client.force_authenticate(user=test_user)
+        response = api_client.get(reverse('study-plan-stats', kwargs={'plan_id': plan.id}))
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['completion_rate'] == 100.0
+--- tests/test_study_groups.py
+"""
+Study Groups App Tests
+"""
+import pytest
+from django.urls import reverse
+from rest_framework.test import APIClient
+from rest_framework import status
+
+from apps.accounts.models import Student
+from apps.timetable.models import Course, StudentCourse
+from apps.study_groups.models import StudyGroup, GroupMembership
+
+
+@pytest.fixture
+def api_client():
+    return APIClient()
+
+
+@pytest.fixture
+def test_user():
+    return Student.objects.create_user(
+        username='teststudent',
+        email='test@richfield.ac.za',
+        password='testpass123'
+    )
+
+
+@pytest.fixture
+def test_course():
+    return Course.objects.create(code='MAT201', name='Mathematics II', credits=4)
+
+
+@pytest.fixture
+def test_group(test_course, test_user):
+    group = StudyGroup.objects.create(
+        name='Math Study Group',
+        course=test_course,
+        created_by=test_user,
+        max_members=5,
+        privacy='public'
+    )
+    GroupMembership.objects.create(
+        group=group,
+        student=test_user,
+        status='active',
+        role='admin'
+    )
+    return group
+
+
+@pytest.mark.django_db
+class TestGroupCreation:
+    def test_create_group(self, api_client, test_user, test_course):
+        StudentCourse.objects.create(student=test_user, course=test_course)
+
+        api_client.force_authenticate(user=test_user)
+        data = {
+            'name': 'New Study Group',
+            'course_id': test_course.id,
+            'max_members': 4,
+            'privacy': 'public'
+        }
+        response = api_client.post(reverse('study-group-list'), data)
+        assert response.status_code == status.HTTP_201_CREATED
+        assert StudyGroup.objects.filter(name='New Study Group').exists()
+
+
+@pytest.mark.django_db
+class TestGroupJoining:
+    def test_join_public_group(self, api_client, test_user, test_course, test_group):
+        StudentCourse.objects.create(student=test_user, course=test_course)
+
+        other_user = Student.objects.create_user(
+            username='otherstudent',
+            email='other@richfield.ac.za',
+            password='testpass123'
+        )
+        StudentCourse.objects.create(student=other_user, course=test_course)
+
+        api_client.force_authenticate(user=other_user)
+        response = api_client.post(reverse('join-group', kwargs={'group_id': test_group.id}))
+        assert response.status_code == status.HTTP_200_OK
+        assert GroupMembership.objects.filter(group=test_group, student=other_user).exists()
+
+
+@pytest.mark.django_db
+class TestGroupMatching:
+    def test_find_study_groups(self, api_client, test_user, test_course, test_group):
+        StudentCourse.objects.create(student=test_user, course=test_course)
+
+        api_client.force_authenticate(user=test_user)
+        response = api_client.get(reverse('find-study-groups'))
+        assert response.status_code == status.HTTP_200_OK
+        assert 'recommended_groups' in response.data
+--- tests/test_timetable.py
+"""
+Timetable App Tests
+"""
+import pytest
+from django.urls import reverse
+from rest_framework.test import APIClient
+from rest_framework import status
+from datetime import datetime, time, date
+
+from apps.accounts.models import Student
+from apps.timetable.models import Course, ClassSchedule, StudentCourse, Assignment, ExamSchedule
+
+
+@pytest.fixture
+def api_client():
+    return APIClient()
+
+
+@pytest.fixture
+def test_user():
+    return Student.objects.create_user(
+        username='teststudent',
+        email='test@richfield.ac.za',
+        password='testpass123'
+    )
+
+
+@pytest.fixture
+def test_course():
+    return Course.objects.create(
+        code='MAT201',
+        name='Mathematics II',
+        credits=4,
+        difficulty_rating=4,
+        estimated_study_hours_per_week=8
+    )
+
+
+@pytest.fixture
+def test_schedule(test_course):
+    return ClassSchedule.objects.create(
+        course=test_course,
+        session_type='lecture',
+        day_of_week=0,  # Monday
+        start_time=time(8, 0),
+        end_time=time(10, 0),
+        venue='Room 101',
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 12, 31)
+    )
+
+
+@pytest.mark.django_db
+class TestCourseManagement:
+    def test_create_course(self, api_client, test_user):
+        api_client.force_authenticate(user=test_user)
+        data = {
+            'code': 'PHY101',
+            'name': 'Physics I',
+            'credits': 3,
+            'difficulty_rating': 3
+        }
+        response = api_client.post(reverse('course-list'), data)
+        assert response.status_code == status.HTTP_201_CREATED
+        assert Course.objects.filter(code='PHY101').exists()
+
+    def test_list_courses(self, api_client, test_user, test_course):
+        api_client.force_authenticate(user=test_user)
+        response = api_client.get(reverse('course-list'))
+        assert response.status_code == status.HTTP_200_OK
+        assert len(response.data['results']) >= 1
+
+
+@pytest.mark.django_db
+class TestEnrollment:
+    def test_enroll_in_course(self, api_client, test_user, test_course):
+        api_client.force_authenticate(user=test_user)
+        data = {'course_id': test_course.id, 'semester': 'semester_2'}
+        response = api_client.post(reverse('enroll'), data)
+        assert response.status_code == status.HTTP_201_CREATED
+        assert StudentCourse.objects.filter(student=test_user, course=test_course).exists()
+
+
+@pytest.mark.django_db
+class TestConflictDetection:
+    def test_detect_overlapping_classes(self, api_client, test_user, test_course, test_schedule):
+        # Create overlapping schedule
+        ClassSchedule.objects.create(
+            course=test_course,
+            session_type='tutorial',
+            day_of_week=0,
+            start_time=time(9, 0),
+            end_time=time(11, 0),
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 12, 31)
+        )
+
+        api_client.force_authenticate(user=test_user)
+        response = api_client.get(reverse('detect-conflicts'))
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['total_conflicts'] > 0
+        assert len(response.data['overlapping_classes']) > 0
+
+
+@pytest.mark.django_db
+class TestDashboard:
+    def test_dashboard_summary(self, api_client, test_user, test_course, test_schedule):
+        api_client.force_authenticate(user=test_user)
+        response = api_client.get(reverse('dashboard-summary'))
+        assert response.status_code == status.HTTP_200_OK
+        assert 'total_courses' in response.data
+--- apps/attendance/models.py
+"""
+Attendance Models
+"""
+from django.db import models
+from django.conf import settings
+
+
+class AttendanceRecord(models.Model):
+    """Individual attendance record for a class session"""
+
+    STATUS_CHOICES = [
+        ('present', 'Present'),
+        ('absent', 'Absent'),
+        ('late', 'Late'),
+        ('excused', 'Excused'),
+        ('cancelled', 'Class Cancelled'),
+    ]
+
+    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='attendance_records')
+    class_schedule = models.ForeignKey('timetable.ClassSchedule', on_delete=models.CASCADE, related_name='attendance_records')
+
+    date = models.DateField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='present')
+    check_in_time = models.TimeField(null=True, blank=True)
+    check_out_time = models.TimeField(null=True, blank=True)
+
+    # For late arrivals
+    minutes_late = models.PositiveSmallIntegerField(default=0)
+
+    # Notes
+    notes = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'attendance_records'
+        unique_together = ['student', 'class_schedule', 'date']
+        ordering = ['-date']
+
+    def __str__(self):
+        return f"{self.student.username} - {self.class_schedule.course.code} ({self.date}: {self.status})"
+
+
+class AttendanceSummary(models.Model):
+    """Rolling attendance summary per course per student"""
+
+    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='attendance_summaries')
+    course = models.ForeignKey('timetable.Course', on_delete=models.CASCADE, related_name='attendance_summaries')
+
+    total_sessions = models.PositiveIntegerField(default=0)
+    present_count = models.PositiveIntegerField(default=0)
+    absent_count = models.PositiveIntegerField(default=0)
+    late_count = models.PositiveIntegerField(default=0)
+    excused_count = models.PositiveIntegerField(default=0)
+
+    attendance_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=100.00)
+
+    # Thresholds
+    minimum_required_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=80.00)
+    warning_threshold_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=85.00)
+
+    # Alert tracking
+    last_warning_sent = models.DateTimeField(null=True, blank=True)
+    warning_count = models.PositiveSmallIntegerField(default=0)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'attendance_summaries'
+        unique_together = ['student', 'course']
+
+    def __str__(self):
+        return f"{self.student.username} - {self.course.code}: {self.attendance_percentage}%"
+
+    def calculate_percentage(self):
+        """Recalculate attendance percentage"""
+        countable = self.total_sessions - self.excused_count
+        if countable == 0:
+            self.attendance_percentage = 100.00
+        else:
+            self.attendance_percentage = round(
+                (self.present_count + self.late_count) / countable * 100, 2
+            )
+        return self.attendance_percentage
+
+    @property
+    def is_below_minimum(self):
+        return self.attendance_percentage < self.minimum_required_percentage
+
+    @property
+    def is_near_threshold(self):
+        return self.attendance_percentage < self.warning_threshold_percentage
+--- apps/scheduler/serializers.py
+"""
+Scheduler Serializers
+"""
+from rest_framework import serializers
+from .models import StudyPlan, StudySession
+from apps.timetable.serializers import CourseSerializer
+
+
+class StudySessionSerializer(serializers.ModelSerializer):
+    """Study session serializer"""
+    course = CourseSerializer(read_only=True)
+    day_name = serializers.CharField(source='get_day_of_week_display', read_only=True)
+
+    class Meta:
+        model = StudySession
+        fields = [
+            'id', 'study_plan', 'course', 'day_of_week', 'day_name',
+            'start_time', 'end_time', 'duration_minutes',
+            'session_type', 'topic', 'notes',
+            'priority_score', 'difficulty_weight',
+            'is_completed', 'actual_duration_minutes',
+            'completion_notes', 'completed_at', 'created_at'
+        ]
+
+
+class StudyPlanSerializer(serializers.ModelSerializer):
+    """Study plan serializer with sessions"""
+    sessions = StudySessionSerializer(many=True, read_only=True)
+    session_count = serializers.IntegerField(source='sessions.count', read_only=True)
+    total_study_hours = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StudyPlan
+        fields = [
+            'id', 'student', 'name', 'week_start', 'week_end',
+            'status', 'generation_time_ms', 'optimization_score',
+            'sessions', 'session_count', 'total_study_hours',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['student']
+
+    def get_total_study_hours(self, obj):
+        total = sum(s.duration_minutes for s in obj.sessions.all())
+        return round(total / 60, 2)
+--- apps/scheduler/views.py
+"""
+Scheduler Views - AI Study Plan Generation using OR-Tools
+"""
+from rest_framework import generics, status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from django.shortcuts import get_object_or_404
+from datetime import datetime, timedelta, time
+from ortools.sat.python import cp_model
+import json
+
+from .models import StudyPlan, StudySession
+from .serializers import StudyPlanSerializer, StudySessionSerializer
+from apps.timetable.models import Course, ClassSchedule, StudentCourse, Assignment, ExamSchedule
+
+
+class StudyPlanListView(generics.ListCreateAPIView):
+    """List all study plans or create new"""
+    serializer_class = StudyPlanSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return StudyPlan.objects.filter(student=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(student=self.request.user)
+
+
+class StudyPlanDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update, or delete a study plan"""
+    serializer_class = StudyPlanSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return StudyPlan.objects.filter(student=self.request.user)
+
+
+class StudySessionListView(generics.ListCreateAPIView):
+    """List study sessions or create new"""
+    serializer_class = StudySessionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return StudySession.objects.filter(study_plan__student=self.request.user)
+
+
+class StudySessionDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update, or delete a study session"""
+    serializer_class = StudySessionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return StudySession.objects.filter(study_plan__student=self.request.user)
+
+
+# ============ AI STUDY PLAN GENERATOR ============
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def generate_study_plan(request):
+    """
+    Generate an optimized study plan using Google OR-Tools CP-SAT solver
+
+    Request body:
+    {
+        "week_start": "2026-06-01",
+        "week_end": "2026-06-07",
+        "courses": [1, 2, 3],  // optional, defaults to enrolled courses
+        "preferences": {
+            "max_hours_per_day": 6,
+            "preferred_times": ["morning", "afternoon"],
+            "min_break_minutes": 30
+        }
+    }
+    """
+    import time as time_module
+    start_time = time_module.time()
+
+    student = request.user
+    data = request.data
+
+    week_start = datetime.strptime(data.get('week_start'), '%Y-%m-%d').date()
+    week_end = datetime.strptime(data.get('week_end'), '%Y-%m-%d').date()
+
+    # Get student's courses
+    if 'courses' in data:
+        course_ids = data['courses']
+    else:
+        course_ids = StudentCourse.objects.filter(
+            student=student,
+            semester='semester_2',
+            academic_year='2026'
+        ).values_list('course_id', flat=True)
+
+    courses = Course.objects.filter(id__in=course_ids)
+
+    if not courses.exists():
+        return Response(
+            {'error': 'No courses found. Please enroll in courses first.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Get preferences
+    prefs = data.get('preferences', {})
+    max_hours_per_day = prefs.get('max_hours_per_day', student.max_study_hours_per_day or 6)
+    min_break = prefs.get('min_break_minutes', student.preferred_break_duration or 30)
+    study_preference = student.study_preference or 'flexible'
+
+    # Get existing class schedules for the week
+    existing_schedules = ClassSchedule.objects.filter(
+        course_id__in=course_ids,
+        is_recurring=True
+    )
+
+    # Get upcoming assignments
+    assignments = Assignment.objects.filter(
+        course_id__in=course_ids,
+        due_date__gte=datetime.combine(week_start, time.min),
+        due_date__lte=datetime.combine(week_end, time.max)
+    )
+
+    # ============ OR-TOOLS CONSTRAINT SOLVER ============
+    model = cp_model.CpModel()
+
+    # Define time slots: 30-minute blocks from 6:00 to 23:00
+    SLOT_DURATION = 30  # minutes
+    START_HOUR = 6
+    END_HOUR = 23
+    SLOTS_PER_DAY = (END_HOUR - START_HOUR) * 2  # 34 slots per day
+    DAYS = 7  # Monday to Sunday
+
+    # Create decision variables: x[course][day][slot] = 0 or 1
+    study_slots = {}
+    for course in courses:
+        for day in range(DAYS):
+            for slot in range(SLOTS_PER_DAY):
+                study_slots[(course.id, day, slot)] = model.NewBoolVar(
+                    f'study_c{course.id}_d{day}_s{slot}'
+                )
+
+    # ============ HARD CONSTRAINTS ============
+
+    # 1. No overlap with existing classes
+    for schedule in existing_schedules:
+        day = schedule.day_of_week
+        start_slot = (schedule.start_time.hour - START_HOUR) * 2 + schedule.start_time.minute // 30
+        end_slot = (schedule.end_time.hour - START_HOUR) * 2 + schedule.end_time.minute // 30
+
+        for course in courses:
+            for slot in range(max(0, start_slot), min(SLOTS_PER_DAY, end_slot)):
+                model.Add(study_slots[(course.id, day, slot)] == 0)
+
+    # 2. Maximum hours per day
+    for day in range(DAYS):
+        daily_slots = []
+        for course in courses:
+            for slot in range(SLOTS_PER_DAY):
+                daily_slots.append(study_slots[(course.id, day, slot)])
+        model.Add(sum(daily_slots) <= max_hours_per_day * 2)  # *2 because slots are 30 min
+
+    # 3. Minimum break between study sessions (30 min = 1 slot)
+    for course in courses:
+        for day in range(DAYS):
+            for slot in range(SLOTS_PER_DAY - 1):
+                # If studying at slot, can't study at slot+1 (break requirement)
+                # Relaxed: allow consecutive if same course
+                pass  # Simplified for this version
+
+    # 4. Each course gets minimum study time based on credits and difficulty
+    for course in courses:
+        min_slots = course.credits * 2  # 1 hour per credit per week minimum
+        course_slots = []
+        for day in range(DAYS):
+            for slot in range(SLOTS_PER_DAY):
+                course_slots.append(study_slots[(course.id, day, slot)])
+        model.Add(sum(course_slots) >= min_slots)
+
+    # ============ SOFT CONSTRAINTS / OBJECTIVE ============
+
+    # Objective: Maximize study quality score
+    # Score = difficulty_weight * preference_alignment * deadline_proximity
+    objective_terms = []
+
+    for course in courses:
+        difficulty = course.difficulty_rating or 3
+
+        for day in range(DAYS):
+            for slot in range(SLOTS_PER_DAY):
+                # Time preference score
+                hour = START_HOUR + slot // 2
+                preference_score = get_preference_score(hour, study_preference)
+
+                # Deadline proximity score (higher if assignment due soon)
+                deadline_score = get_deadline_score(course, assignments, day)
+
+                # Combined score
+                score = int(difficulty * preference_score * deadline_score * 10)
+                objective_terms.append(score * study_slots[(course.id, day, slot)])
+
+    model.Maximize(sum(objective_terms))
+
+    # ============ SOLVE ============
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = 5.0  # Max 5 seconds
+    solver.parameters.num_search_workers = 4
+
+    result = solver.Solve(model)
+
+    if result not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
+        return Response(
+            {'error': 'Could not generate a feasible study plan. Try relaxing constraints.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # ============ CREATE STUDY PLAN ============
+    study_plan = StudyPlan.objects.create(
+        student=student,
+        name=f"Study Plan: {week_start} to {week_end}",
+        week_start=week_start,
+        week_end=week_end,
+        status='active',
+        generation_time_ms=int((time_module.time() - start_time) * 1000),
+        optimization_score=round(solver.ObjectiveValue() / 100, 2) if result == cp_model.OPTIMAL else None
+    )
+
+    # Extract solution and create study sessions
+    sessions_created = []
+    for course in courses:
+        for day in range(DAYS):
+            slots = []
+            for slot in range(SLOTS_PER_DAY):
+                if solver.Value(study_slots[(course.id, day, slot)]) == 1:
+                    slots.append(slot)
+
+            # Group consecutive slots into sessions
+            if slots:
+                sessions = group_consecutive_slots(slots)
+                for session_slots in sessions:
+                    start_slot = session_slots[0]
+                    end_slot = session_slots[-1] + 1
+
+                    start_time_obj = time(
+                        START_HOUR + start_slot // 2,
+                        (start_slot % 2) * 30
+                    )
+                    end_time_obj = time(
+                        START_HOUR + end_slot // 2,
+                        (end_slot % 2) * 30
+                    )
+
+                    duration = (end_slot - start_slot) * 30
+
+                    # Determine session type based on course and timing
+                    session_type = determine_session_type(course, duration)
+
+                    study_session = StudySession.objects.create(
+                        study_plan=study_plan,
+                        course=course,
+                        day_of_week=day,
+                        start_time=start_time_obj,
+                        end_time=end_time_obj,
+                        duration_minutes=duration,
+                        session_type=session_type,
+                        topic=f"Study {course.code}",
+                        priority_score=round(difficulty * preference_score / 10, 2),
+                        difficulty_weight=course.difficulty_rating
+                    )
+                    sessions_created.append(study_session)
+
+    return Response({
+        'study_plan': StudyPlanSerializer(study_plan).data,
+        'sessions_created': len(sessions_created),
+        'solver_status': 'OPTIMAL' if result == cp_model.OPTIMAL else 'FEASIBLE',
+        'generation_time_ms': study_plan.generation_time_ms,
+        'message': 'Study plan generated successfully'
+    })
+
+
+def get_preference_score(hour, preference):
+    """Return preference score (1-5) based on time of day and student preference"""
+    scores = {
+        'morning': {6: 5, 7: 5, 8: 5, 9: 4, 10: 4, 11: 3, 12: 2, 13: 1, 14: 1, 15: 1, 16: 1, 17: 1, 18: 1, 19: 1, 20: 1, 21: 1, 22: 1},
+        'afternoon': {6: 1, 7: 1, 8: 2, 9: 3, 10: 4, 11: 5, 12: 5, 13: 5, 14: 4, 15: 4, 16: 3, 17: 2, 18: 1, 19: 1, 20: 1, 21: 1, 22: 1},
+        'evening': {6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 1, 12: 1, 13: 2, 14: 2, 15: 3, 16: 4, 17: 5, 18: 5, 19: 5, 20: 4, 21: 4, 22: 3},
+        'night': {6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 1, 12: 1, 13: 1, 14: 1, 15: 1, 16: 1, 17: 1, 18: 1, 19: 2, 20: 3, 21: 4, 22: 5},
+        'flexible': {h: 3 for h in range(6, 23)},
+    }
+    return scores.get(preference, scores['flexible']).get(hour, 1)
+
+
+def get_deadline_score(course, assignments, day_offset):
+    """Higher score if assignment due soon"""
+    from datetime import timedelta
+    target_date = datetime.now().date() + timedelta(days=day_offset)
+
+    course_assignments = [a for a in assignments if a.course_id == course.id]
+    if not course_assignments:
+        return 1.0
+
+    # Find closest assignment
+    closest_days = min(
+        [(a.due_date.date() - target_date).days for a in course_assignments],
+        default=999
+    )
+
+    if closest_days <= 0:
+        return 5.0  # Due today or overdue
+    elif closest_days <= 2:
+        return 4.0
+    elif closest_days <= 5:
+        return 3.0
+    elif closest_days <= 10:
+        return 2.0
+    else:
+        return 1.0
+
+
+def group_consecutive_slots(slots):
+    """Group consecutive slot numbers into sessions"""
+    if not slots:
+        return []
+
+    sessions = []
+    current = [slots[0]]
+
+    for slot in slots[1:]:
+        if slot == current[-1] + 1:
+            current.append(slot)
+        else:
+            sessions.append(current)
+            current = [slot]
+    sessions.append(current)
+
+    return sessions
+
+
+def determine_session_type(course, duration_minutes):
+    """Determine session type based on course and duration"""
+    if duration_minutes <= 30:
+        return 'review'
+    elif duration_minutes <= 60:
+        return 'reading'
+    elif course.code.startswith('MAT') or course.code.startswith('PHY'):
+        return 'practice'
+    else:
+        return 'deep_study'
+
+
+# ============ STUDY PLAN UTILITIES ============
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def mark_session_complete(request, session_id):
+    """Mark a study session as completed"""
+    session = get_object_or_404(
+        StudySession,
+        id=session_id,
+        study_plan__student=request.user
+    )
+
+    session.is_completed = True
+    session.actual_duration_minutes = request.data.get('actual_duration_minutes', session.duration_minutes)
+    session.completion_notes = request.data.get('notes', '')
+    session.completed_at = datetime.now()
+    session.save()
+
+    return Response({
+        'message': 'Session marked as complete',
+        'session': StudySessionSerializer(session).data
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def study_plan_stats(request, plan_id):
+    """Get statistics for a study plan"""
+    plan = get_object_or_404(StudyPlan, id=plan_id, student=request.user)
+    sessions = plan.sessions.all()
+
+    total_sessions = sessions.count()
+    completed_sessions = sessions.filter(is_completed=True).count()
+    total_planned_minutes = sum(s.duration_minutes for s in sessions)
+    total_actual_minutes = sum(s.actual_duration_minutes or 0 for s in sessions)
+
+    # Per-course breakdown
+    course_stats = {}
+    for session in sessions:
+        code = session.course.code
+        if code not in course_stats:
+            course_stats[code] = {
+                'course_name': session.course.name,
+                'total_sessions': 0,
+                'completed_sessions': 0,
+                'planned_minutes': 0,
+                'actual_minutes': 0
+            }
+        course_stats[code]['total_sessions'] += 1
+        course_stats[code]['planned_minutes'] += session.duration_minutes
+        if session.is_completed:
+            course_stats[code]['completed_sessions'] += 1
+            course_stats[code]['actual_minutes'] += session.actual_duration_minutes or 0
+
+    return Response({
+        'plan_name': plan.name,
+        'completion_rate': round(completed_sessions / total_sessions * 100, 2) if total_sessions else 0,
+        'total_sessions': total_sessions,
+        'completed_sessions': completed_sessions,
+        'total_planned_hours': round(total_planned_minutes / 60, 2),
+        'total_actual_hours': round(total_actual_minutes / 60, 2),
+        'adherence_rate': round(total_actual_minutes / total_planned_minutes * 100, 2) if total_planned_minutes else 0,
+        'course_breakdown': course_stats
+    })
+--- apps/study_groups/serializers.py
+"""
+Study Groups Serializers
+"""
+from rest_framework import serializers
+from .models import StudyGroup, GroupMembership, GroupMeeting, GroupMessage
+from apps.timetable.serializers import CourseSerializer
+from apps.accounts.serializers import StudentSerializer
+
+
+class GroupMembershipSerializer(serializers.ModelSerializer):
+    """Group membership serializer"""
+    student = StudentSerializer(read_only=True)
+    student_name = serializers.CharField(source='student.get_full_name', read_only=True)
+
+    class Meta:
+        model = GroupMembership
+        fields = [
+            'id', 'group', 'student', 'student_name',
+            'status', 'role', 'joined_at', 'left_at'
+        ]
+
+
+class StudyGroupSerializer(serializers.ModelSerializer):
+    """Study group serializer"""
+    course = CourseSerializer(read_only=True)
+    created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
+    current_member_count = serializers.IntegerField(read_only=True)
+    available_slots = serializers.IntegerField(read_only=True)
+    is_full = serializers.BooleanField(read_only=True)
+    members = GroupMembershipSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = StudyGroup
+        fields = [
+            'id', 'name', 'description', 'course',
+            'max_members', 'privacy', 'status',
+            'preferred_day', 'preferred_time_start', 'preferred_time_end',
+            'venue', 'is_online', 'meeting_link',
+            'created_by', 'created_by_name',
+            'current_member_count', 'available_slots', 'is_full',
+            'members', 'created_at', 'updated_at'
+        ]
+
+
+class GroupMeetingSerializer(serializers.ModelSerializer):
+    """Group meeting serializer"""
+    created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
+
+    class Meta:
+        model = GroupMeeting
+        fields = [
+            'id', 'group', 'title', 'description',
+            'date', 'start_time', 'end_time',
+            'venue', 'is_online', 'meeting_link',
+            'status', 'created_by', 'created_by_name', 'created_at'
+        ]
+
+
+class GroupMessageSerializer(serializers.ModelSerializer):
+    """Group message serializer"""
+    sender_name = serializers.CharField(source='sender.get_full_name', read_only=True)
+
+    class Meta:
+        model = GroupMessage
+        fields = [
+            'id', 'group', 'sender', 'sender_name',
+            'content', 'created_at', 'is_edited', 'edited_at'
+        ]
+        read_only_fields = ['sender']
+--- apps/study_groups/views.py
+"""
+Study Groups Views - Group Study Matching
+"""
+from rest_framework import generics, status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from django.shortcuts import get_object_or_404
+from django.db.models import Count, Q
+from datetime import datetime, timedelta
+
+from .models import StudyGroup, GroupMembership, GroupMeeting, GroupMessage
+from .serializers import (
+    StudyGroupSerializer, GroupMembershipSerializer,
+    GroupMeetingSerializer, GroupMessageSerializer
+)
+from apps.timetable.models import StudentCourse, ClassSchedule
+
+
+class StudyGroupListView(generics.ListCreateAPIView):
+    """List all study groups or create new"""
+    serializer_class = StudyGroupSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = StudyGroup.objects.filter(status='active')
+
+        # Filter by course if provided
+        course_id = self.request.query_params.get('course')
+        if course_id:
+            queryset = queryset.filter(course_id=course_id)
+
+        # Filter by privacy
+        privacy = self.request.query_params.get('privacy')
+        if privacy:
+            queryset = queryset.filter(privacy=privacy)
+
+        # Filter by day
+        day = self.request.query_params.get('day')
+        if day:
+            queryset = queryset.filter(preferred_day=day)
+
+        return queryset
+
+    def perform_create(self, serializer):
+        group = serializer.save(created_by=self.request.user)
+        # Creator automatically becomes admin
+        GroupMembership.objects.create(
+            group=group,
+            student=self.request.user,
+            status='active',
+            role='admin'
+        )
+
+
+class StudyGroupDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update, or delete a study group"""
+    serializer_class = StudyGroupSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return StudyGroup.objects.all()
+
+
+class GroupMembershipListView(generics.ListCreateAPIView):
+    """List or create group memberships"""
+    serializer_class = GroupMembershipSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return GroupMembership.objects.filter(student=self.request.user)
+
+
+class JoinGroupView(generics.CreateAPIView):
+    """Request to join a study group"""
+    serializer_class = GroupMembershipSerializer
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, group_id):
+        group = get_object_or_404(StudyGroup, id=group_id)
+        student = request.user
+
+        # Check if already a member
+        if GroupMembership.objects.filter(group=group, student=student).exists():
+            return Response(
+                {'error': 'You are already a member of this group'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check if group is full
+        if group.is_full:
+            return Response(
+                {'error': 'This group is full'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check if student is enrolled in the course
+        if not StudentCourse.objects.filter(student=student, course=group.course).exists():
+            return Response(
+                {'error': 'You must be enrolled in this course to join the study group'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Determine membership status based on privacy
+        membership_status = 'active' if group.privacy == 'public' else 'pending'
+
+        membership = GroupMembership.objects.create(
+            group=group,
+            student=student,
+            status=membership_status,
+            role='member'
+        )
+
+        # Update group status if now full
+        if group.is_full:
+            group.status = 'full'
+            group.save()
+
+        return Response({
+            'message': 'Join request submitted' if membership_status == 'pending' else 'Successfully joined group',
+            'membership': GroupMembershipSerializer(membership).data
+        })
+
+
+class LeaveGroupView(generics.DestroyAPIView):
+    """Leave a study group"""
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, group_id):
+        group = get_object_or_404(StudyGroup, id=group_id)
+        membership = get_object_or_404(
+            GroupMembership,
+            group=group,
+            student=request.user,
+            status='active'
+        )
+
+        membership.status = 'left'
+        membership.left_at = datetime.now()
+        membership.save()
+
+        # Update group status if was full
+        if group.status == 'full':
+            group.status = 'active'
+            group.save()
+
+        return Response({'message': 'Successfully left the group'})
+
+
+# ============ GROUP STUDY MATCHING ALGORITHM ============
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def find_study_groups(request):
+    """
+    Find recommended study groups for current student
+    Uses compatibility scoring based on:
+    - Shared courses
+    - Temporal overlap in free time
+    - Group size preference
+    """
+    student = request.user
+
+    # Get student's enrolled courses
+    enrolled_courses = StudentCourse.objects.filter(student=student).values_list('course_id', flat=True)
+
+    # Get student's class schedules (busy times)
+    busy_slots = get_student_busy_slots(student)
+
+    # Find active groups for enrolled courses
+    groups = StudyGroup.objects.filter(
+        course_id__in=enrolled_courses,
+        status='active',
+        privacy__in=['public', 'invite_only']
+    ).exclude(
+        members__student=student  # Exclude groups already joined
+    )
+
+    # Score each group
+    scored_groups = []
+    for group in groups:
+        score = calculate_group_compatibility(student, group, busy_slots)
+        scored_groups.append({
+            'group': StudyGroupSerializer(group).data,
+            'compatibility_score': score,
+            'reasons': get_compatibility_reasons(student, group, busy_slots)
+        })
+
+    # Sort by compatibility score (highest first)
+    scored_groups.sort(key=lambda x: x['compatibility_score'], reverse=True)
+
+    return Response({
+        'recommended_groups': scored_groups[:10],
+        'total_available': len(scored_groups)
+    })
+
+
+def get_student_busy_slots(student):
+    """Get student's busy time slots for the week"""
+    from collections import defaultdict
+
+    busy = defaultdict(list)
+    schedules = ClassSchedule.objects.filter(
+        course__enrolled_students__student=student
+    )
+
+    for schedule in schedules:
+        busy[schedule.day_of_week].append({
+            'start': schedule.start_time,
+            'end': schedule.end_time
+        })
+
+    return busy
+
+
+def calculate_group_compatibility(student, group, busy_slots):
+    """Calculate compatibility score (0-100)"""
+    score = 0
+
+    # Base score for shared course
+    score += 30
+
+    # Temporal compatibility (40 points max)
+    if group.preferred_day is not None and group.preferred_time_start and group.preferred_time_end:
+        day_busy = busy_slots.get(group.preferred_day, [])
+
+        # Check if group time conflicts with classes
+        has_conflict = False
+        for slot in day_busy:
+            if (slot['start'] < group.preferred_time_end and
+                slot['end'] > group.preferred_time_start):
+                has_conflict = True
+                break
+
+        if not has_conflict:
+            score += 40
+        else:
+            # Partial score if only minor overlap
+            score += 10
+    else:
+        # No preference set = flexible = good
+        score += 25
+
+    # Group size preference (20 points max)
+    if group.current_member_count < 3:
+        score += 20  # Small group, more intimate
+    elif group.current_member_count < group.max_members - 1:
+        score += 15  # Medium group
+    else:
+        score += 5   # Almost full
+
+    # Online preference (10 points)
+    if group.is_online:
+        score += 10  # Online = more accessible
+
+    return min(score, 100)
+
+
+def get_compatibility_reasons(student, group, busy_slots):
+    """Generate human-readable reasons for compatibility"""
+    reasons = []
+
+    reasons.append(f"You are enrolled in {group.course.code}")
+
+    if group.preferred_day is not None:
+        day_name = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][group.preferred_day]
+
+        day_busy = busy_slots.get(group.preferred_day, [])
+        has_conflict = False
+        for slot in day_busy:
+            if (slot['start'] < group.preferred_time_end and
+                slot['end'] > group.preferred_time_start):
+                has_conflict = True
+                break
+
+        if not has_conflict:
+            reasons.append(f"Meets on {day_name} when you are free")
+        else:
+            reasons.append(f"Meets on {day_name} (some schedule overlap)")
+
+    if group.is_online:
+        reasons.append("Online meeting - no travel needed")
+
+    if group.current_member_count < 3:
+        reasons.append("Small group - more focused discussion")
+
+    return reasons
+
+
+# ============ GROUP MEETING VIEWS ============
+
+class GroupMeetingListView(generics.ListCreateAPIView):
+    """List or create group meetings"""
+    serializer_class = GroupMeetingSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Get meetings for groups the student is a member of
+        member_groups = GroupMembership.objects.filter(
+            student=self.request.user,
+            status='active'
+        ).values_list('group_id', flat=True)
+
+        return GroupMeeting.objects.filter(group_id__in=member_groups)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+
+class GroupMeetingDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update, or delete a group meeting"""
+    serializer_class = GroupMeetingSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        member_groups = GroupMembership.objects.filter(
+            student=self.request.user,
+            status='active'
+        ).values_list('group_id', flat=True)
+        return GroupMeeting.objects.filter(group_id__in=member_groups)
+
+
+# ============ GROUP MESSAGE VIEWS ============
+
+class GroupMessageListView(generics.ListCreateAPIView):
+    """List or create group messages"""
+    serializer_class = GroupMessageSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        group_id = self.request.query_params.get('group')
+        if group_id:
+            # Check membership
+            if not GroupMembership.objects.filter(
+                group_id=group_id,
+                student=self.request.user,
+                status='active'
+            ).exists():
+                return GroupMessage.objects.none()
+            return GroupMessage.objects.filter(group_id=group_id)
+        return GroupMessage.objects.none()
+
+    def perform_create(self, serializer):
+        serializer.save(sender=self.request.user)
+
+
+# ============ MY GROUPS SUMMARY ============
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_groups_summary(request):
+    """Get summary of all groups the student is part of"""
+    student = request.user
+
+    memberships = GroupMembership.objects.filter(
+        student=student,
+        status='active'
+    ).select_related('group', 'group__course')
+
+    groups_data = []
+    for membership in memberships:
+        group = membership.group
+        upcoming_meetings = GroupMeeting.objects.filter(
+            group=group,
+            date__gte=datetime.now().date(),
+            status='scheduled'
+        ).order_by('date', 'start_time')[:3]
+
+        groups_data.append({
+            'group': StudyGroupSerializer(group).data,
+            'my_role': membership.role,
+            'joined_at': membership.joined_at,
+            'upcoming_meetings': GroupMeetingSerializer(upcoming_meetings, many=True).data
+        })
+
+    return Response({
+        'total_groups': len(groups_data),
+        'admin_groups': len([g for g in groups_data if g['my_role'] == 'admin']),
+        'groups': groups_data
+    })

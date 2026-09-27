@@ -1,0 +1,634 @@
+--- apps/accounts/models.py
+"""
+Student User Model
+"""
+from django.contrib.auth.models import AbstractUser
+from django.db import models
+
+
+class Student(AbstractUser):
+    """Custom user model for students"""
+
+    STUDY_PREFERENCE_CHOICES = [
+        ('morning', 'Morning (6AM - 12PM)'),
+        ('afternoon', 'Afternoon (12PM - 6PM)'),
+        ('evening', 'Evening (6PM - 12AM)'),
+        ('night', 'Night (12AM - 6AM)'),
+        ('flexible', 'Flexible'),
+    ]
+
+    YEAR_CHOICES = [
+        (1, 'First Year'),
+        (2, 'Second Year'),
+        (3, 'Third Year'),
+        (4, 'Fourth Year'),
+    ]
+
+    student_number = models.CharField(max_length=20, unique=True, blank=True, null=True)
+    program = models.CharField(max_length=100, blank=True)
+    year_of_study = models.PositiveSmallIntegerField(choices=YEAR_CHOICES, default=1)
+    phone = models.CharField(max_length=20, blank=True)
+
+    # Study preferences for AI scheduling
+    study_preference = models.CharField(
+        max_length=20, 
+        choices=STUDY_PREFERENCE_CHOICES, 
+        default='flexible'
+    )
+    max_study_hours_per_day = models.PositiveSmallIntegerField(default=6)
+    preferred_break_duration = models.PositiveSmallIntegerField(default=30)  # minutes
+
+    # Notification settings
+    email_notifications = models.BooleanField(default=True)
+    push_notifications = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'students'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.first_name} {self.last_name} ({self.student_number or self.username})"
+
+    def get_full_name(self):
+        return f"{self.first_name} {self.last_name}".strip() or self.username
+--- apps/attendance/models.py
+"""
+Attendance Models
+"""
+from django.db import models
+from django.conf import settings
+
+
+class AttendanceRecord(models.Model):
+    """Individual attendance record for a class session"""
+
+    STATUS_CHOICES = [
+        ('present', 'Present'),
+        ('absent', 'Absent'),
+        ('late', 'Late'),
+        ('excused', 'Excused'),
+        ('cancelled', 'Class Cancelled'),
+    ]
+
+    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='attendance_records')
+    class_schedule = models.ForeignKey('timetable.ClassSchedule', on_delete=models.CASCADE, related_name='attendance_records')
+
+    date = models.DateField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='present')
+    check_in_time = models.TimeField(null=True, blank=True)
+    check_out_time = models.TimeField(null=True, blank=True)
+
+    # For late arrivals
+    minutes_late = models.PositiveSmallIntegerField(default=0)
+
+    # Notes
+    notes = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'attendance_records'
+        unique_together = ['student', 'class_schedule', 'date']
+        ordering = ['-date']
+
+    def __str__(self):
+        return f"{self.student.username} - {self.class_schedule.course.code} ({self.date}: {self.status})"
+
+
+class AttendanceSummary(models.Model):
+    """Rolling attendance summary per course per student"""
+
+    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='attendance_summaries')
+    course = models.ForeignKey('timetable.Course', on_delete=models.CASCADE, related_name='attendance_summaries')
+
+    total_sessions = models.PositiveIntegerField(default=0)
+    present_count = models.PositiveIntegerField(default=0)
+    absent_count = models.PositiveIntegerField(default=0)
+    late_count = models.PositiveIntegerField(default=0)
+    excused_count = models.PositiveIntegerField(default=0)
+
+    attendance_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=100.00)
+
+    # Thresholds
+    minimum_required_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=80.00)
+    warning_threshold_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=85.00)
+
+    # Alert tracking
+    last_warning_sent = models.DateTimeField(null=True, blank=True)
+    warning_count = models.PositiveSmallIntegerField(default=0)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'attendance_summaries'
+        unique_together = ['student', 'course']
+
+    def __str__(self):
+        return f"{self.student.username} - {self.course.code}: {self.attendance_percentage}%"
+
+    def calculate_percentage(self):
+        """Recalculate attendance percentage"""
+        countable = self.total_sessions - self.excused_count
+        if countable == 0:
+            self.attendance_percentage = 100.00
+        else:
+            self.attendance_percentage = round(
+                (self.present_count + self.late_count) / countable * 100, 2
+            )
+        return self.attendance_percentage
+
+    @property
+    def is_below_minimum(self):
+        return self.attendance_percentage < self.minimum_required_percentage
+
+    @property
+    def is_near_threshold(self):
+        return self.attendance_percentage < self.warning_threshold_percentage
+--- apps/scheduler/models.py
+"""
+Scheduler Models - Study Plans and Sessions
+"""
+from django.db import models
+from django.conf import settings
+
+
+class StudyPlan(models.Model):
+    """Generated study plan for a student"""
+
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('completed', 'Completed'),
+        ('archived', 'Archived'),
+        ('draft', 'Draft'),
+    ]
+
+    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='study_plans')
+    name = models.CharField(max_length=200, default='My Study Plan')
+    week_start = models.DateField()
+    week_end = models.DateField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+
+    # AI generation metadata
+    generation_time_ms = models.PositiveIntegerField(null=True, blank=True)
+    optimization_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'study_plans'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.student.username} - {self.name} ({self.week_start} to {self.week_end})"
+
+
+class StudySession(models.Model):
+    """Individual study session within a plan"""
+
+    SESSION_TYPE_CHOICES = [
+        ('review', 'Review'),
+        ('deep_study', 'Deep Study'),
+        ('practice', 'Practice Problems'),
+        ('reading', 'Reading'),
+        ('memorization', 'Memorization'),
+        ('group_study', 'Group Study'),
+    ]
+
+    study_plan = models.ForeignKey(StudyPlan, on_delete=models.CASCADE, related_name='sessions')
+    course = models.ForeignKey('timetable.Course', on_delete=models.CASCADE, related_name='study_sessions')
+
+    day_of_week = models.PositiveSmallIntegerField(choices=[
+        (0, 'Monday'), (1, 'Tuesday'), (2, 'Wednesday'),
+        (3, 'Thursday'), (4, 'Friday'), (5, 'Saturday'), (6, 'Sunday')
+    ])
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    duration_minutes = models.PositiveSmallIntegerField()
+
+    session_type = models.CharField(max_length=20, choices=SESSION_TYPE_CHOICES, default='deep_study')
+    topic = models.CharField(max_length=200, blank=True)
+    notes = models.TextField(blank=True)
+
+    # AI scoring
+    priority_score = models.DecimalField(max_digits=4, decimal_places=2, default=0.00)
+    difficulty_weight = models.DecimalField(max_digits=4, decimal_places=2, default=1.00)
+
+    # Completion tracking
+    is_completed = models.BooleanField(default=False)
+    actual_duration_minutes = models.PositiveSmallIntegerField(null=True, blank=True)
+    completion_notes = models.TextField(blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'study_sessions'
+        ordering = ['day_of_week', 'start_time']
+
+    def __str__(self):
+        return f"{self.course.code} - {self.session_type} ({self.get_day_of_week_display()} {self.start_time})"
+--- apps/study_groups/models.py
+"""
+Study Groups Models
+"""
+from django.db import models
+from django.conf import settings
+
+
+class StudyGroup(models.Model):
+    """Study group for collaborative learning"""
+
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('full', 'Full'),
+        ('inactive', 'Inactive'),
+        ('completed', 'Completed'),
+    ]
+
+    PRIVACY_CHOICES = [
+        ('public', 'Public'),
+        ('private', 'Private'),
+        ('invite_only', 'Invite Only'),
+    ]
+
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    course = models.ForeignKey('timetable.Course', on_delete=models.CASCADE, related_name='study_groups')
+
+    # Group settings
+    max_members = models.PositiveSmallIntegerField(default=5)
+    privacy = models.CharField(max_length=20, choices=PRIVACY_CHOICES, default='public')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+
+    # Meeting preferences
+    preferred_day = models.PositiveSmallIntegerField(choices=[
+        (0, 'Monday'), (1, 'Tuesday'), (2, 'Wednesday'),
+        (3, 'Thursday'), (4, 'Friday'), (5, 'Saturday'), (6, 'Sunday')
+    ], null=True, blank=True)
+    preferred_time_start = models.TimeField(null=True, blank=True)
+    preferred_time_end = models.TimeField(null=True, blank=True)
+    venue = models.CharField(max_length=200, blank=True)
+    is_online = models.BooleanField(default=False)
+    meeting_link = models.URLField(blank=True)
+
+    # Creator
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='created_groups')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'study_groups'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.name} ({self.course.code})"
+
+    @property
+    def current_member_count(self):
+        return self.members.filter(status='active').count()
+
+    @property
+    def is_full(self):
+        return self.current_member_count >= self.max_members
+
+    @property
+    def available_slots(self):
+        return self.max_members - self.current_member_count
+
+
+class GroupMembership(models.Model):
+    """Membership in a study group"""
+
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('pending', 'Pending Approval'),
+        ('left', 'Left'),
+        ('removed', 'Removed'),
+    ]
+
+    ROLE_CHOICES = [
+        ('member', 'Member'),
+        ('moderator', 'Moderator'),
+        ('admin', 'Admin'),
+    ]
+
+    group = models.ForeignKey(StudyGroup, on_delete=models.CASCADE, related_name='members')
+    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='group_memberships')
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='member')
+
+    joined_at = models.DateTimeField(auto_now_add=True)
+    left_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'group_memberships'
+        unique_together = ['group', 'student']
+
+    def __str__(self):
+        return f"{self.student.username} in {self.group.name}"
+
+
+class GroupMeeting(models.Model):
+    """Scheduled study group meeting"""
+
+    STATUS_CHOICES = [
+        ('scheduled', 'Scheduled'),
+        ('ongoing', 'Ongoing'),
+        ('completed', 'Completed'),
+        ('cancelled', 'Cancelled'),
+    ]
+
+    group = models.ForeignKey(StudyGroup, on_delete=models.CASCADE, related_name='meetings')
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+
+    date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    venue = models.CharField(max_length=200, blank=True)
+    is_online = models.BooleanField(default=False)
+    meeting_link = models.URLField(blank=True)
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='scheduled')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'group_meetings'
+        ordering = ['-date', '-start_time']
+
+    def __str__(self):
+        return f"{self.group.name} - {self.title} ({self.date})"
+
+
+class GroupMessage(models.Model):
+    """Messages within a study group"""
+
+    group = models.ForeignKey(StudyGroup, on_delete=models.CASCADE, related_name='messages')
+    sender = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    content = models.TextField()
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_edited = models.BooleanField(default=False)
+    edited_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'group_messages'
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"{self.sender.username}: {self.content[:50]}"
+--- apps/timetable/models.py
+"""
+Timetable Models - Courses, Classes, and Schedule Entries
+"""
+from django.db import models
+from django.conf import settings
+
+
+class Course(models.Model):
+    """Academic course catalog"""
+
+    COURSE_TYPE_CHOICES = [
+        ('core', 'Core'),
+        ('elective', 'Elective'),
+        ('prerequisite', 'Prerequisite'),
+    ]
+
+    code = models.CharField(max_length=20, unique=True)
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    credits = models.PositiveSmallIntegerField(default=3)
+    course_type = models.CharField(max_length=20, choices=COURSE_TYPE_CHOICES, default='core')
+    department = models.CharField(max_length=100, blank=True)
+    lecturer_name = models.CharField(max_length=100, blank=True)
+    lecturer_email = models.EmailField(blank=True)
+
+    # Difficulty rating (1-5, used by AI scheduler)
+    difficulty_rating = models.PositiveSmallIntegerField(default=3)
+    estimated_study_hours_per_week = models.PositiveSmallIntegerField(default=6)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'courses'
+        ordering = ['code']
+
+    def __str__(self):
+        return f"{self.code} - {self.name}"
+
+
+class ClassSchedule(models.Model):
+    """Individual class session (lecture, tutorial, lab)"""
+
+    SESSION_TYPE_CHOICES = [
+        ('lecture', 'Lecture'),
+        ('tutorial', 'Tutorial'),
+        ('lab', 'Laboratory'),
+        ('seminar', 'Seminar'),
+        ('workshop', 'Workshop'),
+    ]
+
+    DAY_CHOICES = [
+        (0, 'Monday'),
+        (1, 'Tuesday'),
+        (2, 'Wednesday'),
+        (3, 'Thursday'),
+        (4, 'Friday'),
+        (5, 'Saturday'),
+        (6, 'Sunday'),
+    ]
+
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='schedules')
+    session_type = models.CharField(max_length=20, choices=SESSION_TYPE_CHOICES, default='lecture')
+    day_of_week = models.PositiveSmallIntegerField(choices=DAY_CHOICES)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    venue = models.CharField(max_length=100, blank=True)
+    building = models.CharField(max_length=100, blank=True)
+    room_number = models.CharField(max_length=20, blank=True)
+
+    # For recurring schedules
+    is_recurring = models.BooleanField(default=True)
+    start_date = models.DateField()
+    end_date = models.DateField()
+
+    # For one-off sessions
+    specific_date = models.DateField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'class_schedules'
+        ordering = ['day_of_week', 'start_time']
+
+    def __str__(self):
+        day_name = dict(self.DAY_CHOICES).get(self.day_of_week, 'Unknown')
+        return f"{self.course.code} - {self.session_type} ({day_name} {self.start_time}-{self.end_time})"
+
+    @property
+    def duration_minutes(self):
+        """Calculate session duration in minutes"""
+        from datetime import datetime
+        start = datetime.combine(datetime.today(), self.start_time)
+        end = datetime.combine(datetime.today(), self.end_time)
+        return int((end - start).total_seconds() / 60)
+
+
+class StudentCourse(models.Model):
+    """Many-to-many relationship between students and courses"""
+
+    SEMESTER_CHOICES = [
+        ('semester_1', 'Semester 1'),
+        ('semester_2', 'Semester 2'),
+        ('winter', 'Winter Term'),
+        ('summer', 'Summer Term'),
+    ]
+
+    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='enrolled_courses')
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='enrolled_students')
+    semester = models.CharField(max_length=20, choices=SEMESTER_CHOICES, default='semester_2')
+    academic_year = models.CharField(max_length=10, default='2026')
+    enrollment_date = models.DateField(auto_now_add=True)
+
+    # Student-specific overrides
+    personal_difficulty_rating = models.PositiveSmallIntegerField(null=True, blank=True)
+    target_grade = models.CharField(max_length=5, blank=True)
+
+    class Meta:
+        db_table = 'student_courses'
+        unique_together = ['student', 'course', 'semester', 'academic_year']
+
+    def __str__(self):
+        return f"{self.student.username} - {self.course.code} ({self.semester})"
+
+
+class Assignment(models.Model):
+    """Assignments, tests, and examinations"""
+
+    ASSESSMENT_TYPE_CHOICES = [
+        ('assignment', 'Assignment'),
+        ('test', 'Test'),
+        ('exam', 'Examination'),
+        ('project', 'Project'),
+        ('quiz', 'Quiz'),
+        ('presentation', 'Presentation'),
+    ]
+
+    PRIORITY_CHOICES = [
+        (1, 'Low'),
+        (2, 'Medium'),
+        (3, 'High'),
+        (4, 'Critical'),
+    ]
+
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='assignments')
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    assessment_type = models.CharField(max_length=20, choices=ASSESSMENT_TYPE_CHOICES, default='assignment')
+    due_date = models.DateTimeField()
+    weight_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=10.00)
+    priority = models.PositiveSmallIntegerField(choices=PRIORITY_CHOICES, default=2)
+
+    # Estimated time to complete (hours)
+    estimated_hours = models.PositiveSmallIntegerField(default=5)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'assignments'
+        ordering = ['due_date']
+
+    def __str__(self):
+        return f"{self.course.code} - {self.title} (Due: {self.due_date.date()})"
+
+
+class ExamSchedule(models.Model):
+    """Examination schedule entries"""
+
+    EXAM_TYPE_CHOICES = [
+        ('midterm', 'Mid-Term Examination'),
+        ('final', 'Final Examination'),
+        ('supplementary', 'Supplementary Examination'),
+    ]
+
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='exams')
+    exam_type = models.CharField(max_length=20, choices=EXAM_TYPE_CHOICES, default='final')
+    date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    venue = models.CharField(max_length=100, blank=True)
+    duration_minutes = models.PositiveSmallIntegerField(default=120)
+
+    # For conflict detection
+    is_confirmed = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = 'exam_schedules'
+        ordering = ['date', 'start_time']
+
+    def __str__(self):
+        return f"{self.course.code} - {self.exam_type} ({self.date})"
+--- apps/accounts/apps.py
+"""
+Accounts App Config
+"""
+from django.apps import AppConfig
+
+
+class AccountsConfig(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'apps.accounts'
+    verbose_name = 'Accounts'
+--- apps/attendance/apps.py
+"""
+Attendance App Config
+"""
+from django.apps import AppConfig
+
+
+class AttendanceConfig(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'apps.attendance'
+    verbose_name = 'Attendance'
+--- apps/scheduler/apps.py
+"""
+Scheduler App Config
+"""
+from django.apps import AppConfig
+
+
+class SchedulerConfig(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'apps.scheduler'
+    verbose_name = 'Scheduler'
+--- apps/study_groups/apps.py
+"""
+Study Groups App Config
+"""
+from django.apps import AppConfig
+
+
+class StudyGroupsConfig(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'apps.study_groups'
+    verbose_name = 'Study Groups'
+--- apps/timetable/apps.py
+"""
+Timetable App Config
+"""
+from django.apps import AppConfig
+
+
+class TimetableConfig(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'apps.timetable'
+    verbose_name = 'Timetable'

@@ -1,0 +1,163 @@
+.assignments-page {
+  animation: fadeIn 0.3s ease-in;
+}
+
+.filter-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+
+.filter-btn {
+  padding: 8px 16px;
+  border-radius: 20px;
+  background: white;
+  color: #666;
+  border: 2px solid #e0e0e0;
+  font-size: 0.9rem;
+}
+
+.filter-btn.active {
+  background: #667eea;
+  color: white;
+  border-color: #667eea;
+}
+
+.assignments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.assignment-card {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  border-left: 4px solid #e0e0e0;
+}
+
+.assignment-card.priority-low {
+  border-left-color: #4CAF50;
+}
+
+.assignment-card.priority-medium {
+  border-left-color: #ff9800;
+}
+
+.assignment-card.priority-high {
+  border-left-color: #ff5722;
+}
+
+.assignment-card.priority-critical {
+  border-left-color: #f44336;
+}
+
+.assignment-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.assignment-title h3 {
+  margin: 0 0 4px 0;
+  font-size: 1.1rem;
+}
+
+.course-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  background: #e3f2fd;
+  color: #2196F3;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.priority-badge {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.priority-badge.low {
+  background: #e8f5e9;
+  color: #4CAF50;
+}
+
+.priority-badge.medium {
+  background: #fff3e0;
+  color: #ff9800;
+}
+
+.priority-badge.high {
+  background: #ffebee;
+  color: #f44336;
+}
+
+.priority-badge.critical {
+  background: #f44336;
+  color: white;
+}
+
+.assignment-description {
+  color: #666;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.assignment-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.due-info {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.due-date {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.9rem;
+  background: #e8f5e9;
+  color: #4CAF50;
+}
+
+.due-date.urgent {
+  background: #ffebee;
+  color: #f44336;
+  font-weight: 600;
+}
+
+.days-left {
+  font-size: 0.9rem;
+  color: #888;
+}
+
+.assignment-meta {
+  display: flex;
+  gap: 8px;
+}
+
+.weight-badge,
+.hours-badge {
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  background: #f5f5f5;
+  color: #666;
+}
+
+@media (max-width: 768px) {
+  .assignment-footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
